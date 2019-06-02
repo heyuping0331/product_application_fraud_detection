@@ -1,0 +1,155 @@
+---
+title: "Variable Creation"
+output: word_document
+---
+
+```{r}
+library(dplyr)
+library(data.table)
+library(lubridate)
+# library(zoo)
+library(sparklyr)
+library(DBI)
+# spark_install(version="2.3.1")
+# library(DBI)
+# install.packages('dplyr') 
+# install.packages('lubridate') 
+# install.packages('zoo') 
+
+```
+
+Load data into Spark
+```{r}
+# setwd("/Users/student/Downloads")
+
+d_full = read.csv("applications data.csv")
+colnames(d_full)[1] = "record"
+d_full$date = as.character(ymd(d_full$date)) # yyyy-mm-dd format for Spark SQL
+
+sc= spark_connect(master="local")
+d_full_tbl = copy_to(sc, d_full, overwrite = T)
+
+# List data frames available in Spark
+src_tbls(sc)
+# print(d_full_tbl, n=5, wideth=Inf)
+glimpse(d_full_tbl)
+
+# Disconnect from Spark
+# spark_disconnect(sc)
+```
+
+New fields
+```{r}
+computed = d_full_tbl %>%
+  mutate(namedob = paste(firstname, lastname, dob, sep="_"),
+         fulladdress = paste(address, zip5, sep="_")) %>%
+  compute("d_full2") # store data temporarily in Spark
+ 
+src_tbls(sc)        
+# print(d_full_tbl, n=5, wideth=Inf)
+
+```
+
+Days since variables
+```{r}
+start = Sys.time()
+
+setDT(d_full)
+
+link = c("ssn", 
+         "fulladdress", 
+         "namedob", 
+         "homephone",
+         "ssn,fulladdress", 
+         "ssn,namedob", 
+         "ssn,homephone", 
+         "fulladdress,namedob", 
+         "fulladdress,homephone", 
+         "namedob,homephone",
+         "ssn,fulladdress,namedob", 
+         "ssn,fulladdress,homephone", 
+         "ssn,namedob,homephone", 
+         "fulladdress,namedob,homephone")
+
+for (j in link) {
+  results = dbGetQuery(sc, 
+                      paste("SELECT record, 
+                            DATEDIFF(date, LAG(date,1) OVER (PARTITION BY",
+                            j,"ORDER BY CAST(date AS timestamp))) AS diff_days
+                            FROM d_full2"))
+
+  d_full = d_full[setDT(results), on = .(record), nomatch = 0]
+  setnames(d_full, old = "diff_days", new = paste(j,"days", sep="_"))
+}
+
+end = Sys.time()
+end-start
+
+# Change NA into 0
+d_full[is.na(d_full)] = 0
+
+summary(d_full)
+```
+
+Velocity variables
+```{r}
+
+e = function(expr) eval(parse(text=expr))
+
+start = Sys.time()
+
+days = c("1","2","3","7","14","31")
+link = c("ssn", 
+         "fulladdress", 
+         "namedob", 
+         "homephone",
+         "ssn,fulladdress", 
+         "ssn,namedob", 
+         "ssn,homephone", 
+         "fulladdress,namedob", 
+         "fulladdress,homephone", 
+         "namedob,homephone",
+         "ssn,fulladdress,namedob", 
+         "ssn,fulladdress,homephone", 
+         "ssn,namedob,homephone", 
+         "fulladdress,namedob,homephone")
+
+for (j in link) {
+  for (i in days) {
+    results = dbGetQuery(sc, paste("SELECT record, COUNT(*) OVER(PARTITION BY",j,
+                                   "ORDER BY CAST(date AS timestamp) RANGE BETWEEN INTERVAL", 
+                                  e(i),"DAYS PRECEDING AND CURRENT ROW) new FROM d_full2"))
+
+    d_full = d_full[setDT(results), on = .(record), nomatch = 0]
+    setnames(d_full, old = "new", new = paste(j,e(i), sep=""))
+}
+}
+end = Sys.time()
+end-start
+
+# Subtract 1 from all velocity variables to exclude counting the group entity itself
+d_full[,25:108] = d_full[,25:108]-1
+```
+
+Risk table variable: weekday
+```{r}
+
+
+# Calculate risk table on records only before 2016-11-01
+wday_risk_table = d_full %>%
+  filter(as.Date(date) < "2016-11-01") %>%
+  mutate(weekday = wday(as.Date(date))) %>%
+  group_by(weekday) %>%
+  summarise(wday_risk= mean(fraud_label))
+
+d_full = d_full %>%
+  mutate(weekday = wday(as.Date(date))) %>%
+  left_join(., wday_risk_table, by="weekday") %>%
+  select(-weekday)
+```
+
+Export
+```{r}
+write.csv(d_full, "applications data 4.0.csv", row.names = F)
+```
+
