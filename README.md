@@ -1,2 +1,2 @@
-# product_application_fraud_detection
-A fraud detection algorithm development project that assesses fraud risk of new product applications.
+# Product Application Fraud Detection
+The objective of this project is developing an end-to-end risk scoring system that screens product applications real-time for Client A. The prototype fraud risk scoring system has been successfully built and fine-tuned to maximize the client’s overall fraud savings in a year. The prototype fraud risk model is expected to predict relative risk of frauds. This proposal serves as a technical documentation where we detailed the process through which the fraud scoring system was developed.
